@@ -1,2 +1,4 @@
 weather_data/
 __pycache__/
+*.pkl
+.vscode/
