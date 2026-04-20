@@ -28,9 +28,8 @@ class WeatherBase:
         # Define default meteorological variables for the API payload
         self.queries = [
             'temperature_2m', 'relative_humidity_2m', 'dew_point_2m',
-            'apparent_temperature', 'precipitation', 'rain', 'snowfall',
-            'weather_code', 'wind_speed_10m', 'wind_direction_10m',
-            'soil_temperature_0_to_7cm', 'soil_moisture_0_to_7cm', 'sunshine_duration'
+            'apparent_temperature', 'rain', 'snowfall',
+            'weather_code', 'wind_speed_10m', 'wind_direction_10m'
         ] 
         
         # Initialize state variables for location data
@@ -234,11 +233,10 @@ class WeatherToday(WeatherBase):
         
         # Override payload queries to include forecast-specific variables
         self.queries = [
-            'temperature_2m', 'relative_humidity_2m', 'dew_point_2m',
-            'apparent_temperature', 'precipitation_probability', 'precipitation', 
-            'rain', 'snowfall', 'weather_code', 'visibility', 'wind_speed_10m', 
-            'wind_direction_10m', 'soil_temperature_0cm', 'soil_moisture_0_to_1cm', 
-            'uv_index', 'sunshine_duration'
+            'temperature_2m', 'relative_humidity_2m',
+            'apparent_temperature', 'rain', 'snowfall',
+            'weather_code', 'wind_speed_10m', 
+            'wind_direction_10m'
         ]
 
     def forecast_today(self):
@@ -322,7 +320,7 @@ class AirQuality(WeatherBase):
         }
         
         # Construct a safe filename using the explicitly calculated date objects
-        filename = f"{start_date}_to_{end_date}_AQI.csv"
+        filename = f"{start_date}to{end_date}_AQI.csv"
         
         # Execute the HTTP request and caching logic inherited from WeatherBase
         return self.fetch_api_data(self.aqi_url + self.aqi_endpoint, payload, filename)
