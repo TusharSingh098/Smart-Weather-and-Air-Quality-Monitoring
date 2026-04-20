@@ -4,3 +4,7 @@ requests
 datetime
 scikit-learn
 xgboost
+customtkinter
+pillow
+matplotlib
+seaborn

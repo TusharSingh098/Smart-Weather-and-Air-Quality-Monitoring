@@ -101,7 +101,7 @@ class SpecializedWeatherPredictor:
         # Calculate exactly when "Tomorrow" is and save it
         last_timestamp = recent_data['time'].iloc[-1]
         target_time = last_timestamp + pd.Timedelta(hours=self.forecast_horizon)
-        self.future_date = target_time.strftime('%A, %B %d, %Y at %I:%00 %p')
+        self.future_date = target_time.strftime('%A, %B %d, %Y at %I:%M %p')
         
         feature_vector.append(np.sin(2 * np.pi * target_time.hour / 24))
         feature_vector.append(np.cos(2 * np.pi * target_time.hour / 24))
