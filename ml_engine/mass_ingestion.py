@@ -29,6 +29,10 @@ def run_mass_ingestion(num_days: int = 30):
         for district in districts:
             print(f"  -> Extracting data for {district}...")
             district_path = os.path.join(state_data_dir, district)
+            os.makedirs(district_path, exist_ok=True)
+
+            weather_client.data_dir = state_data_dir
+            aqi_client.data_dir = state_data_dir
             
             try:
                 if weather_client.geolocator(district):

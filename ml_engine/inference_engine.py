@@ -4,8 +4,11 @@ import pickle
 import numpy as np
 import pandas as pd
 import math
+import subprocess
 
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+
 sys.path.append(project_root)
 
 from api_engine.weather_api import WeatherToday
@@ -23,6 +26,21 @@ class SpecializedWeatherPredictor:
         self.lag_hours = lag_hours
         self.forecast_horizon = forecast_horizon
         self.district_path = os.path.join(project_root, "weather_data", self.state, self.district)
+
+        core_model = os.path.join(self.district_path, f"{self.district}_temperature_2m_model.pkl")
+        
+        if not os.path.exists(core_model):
+            print("\n[!] FIRST-RUN DETECTED: Intelligence models not found.")
+            print("[!] Initiating full system ingestion and training. Please wait...")
+            
+            # Trigger the lifecycle controller we built earlier
+            pipeline_path = os.path.join(project_root, "run_ml_pipeline.py")
+            try:
+                subprocess.run([sys.executable, pipeline_path], check=True)
+                print("\n[SUCCESS] System built. Proceeding with forecast...")
+            except subprocess.CalledProcessError:
+                print("\n[FATAL] Automatic build failed. Please check your internet connection.")
+                sys.exit(1)
         
         # The 8 historical clues needed to build the matrix
         self.feature_variables = [
