@@ -1,17 +1,27 @@
 """
 ui_engine/page_aqi.py
-Air Quality Index page – shows PM2.5/PM10 trend, pollutant bars, and
-a half-circle AQI gauge for last 1 / 7 / 30 days.
+Air Quality Index Dashboard & Asynchronous View Controller.
+
+Constructs the AQI view containing PM2.5/PM10 trend charts, pollutant bars, 
+and a half-circle geometric AQI gauge for 1, 7, and 30-day timelines.
+Utilizes multithreading for non-blocking API data ingestion.
+
+Author: Team PyChaoS
+College: NIT Kurukshetra
 """
+
 import threading
 import customtkinter as ctk
 from . import theme
 from . import data_bridge as db
 from . import charts
 
-# ── metric card helper ─────────────────────────────────────────────────────────
+# ─── Metric Component Factory ───────────────────────────────────────────────────
 
 def _metric(parent, icon, value, label, color):
+    """
+    Component factory for generating uniform statistical UI cards.
+    """
     c = theme.get()
     card = ctk.CTkFrame(parent, fg_color=c["card"],
                         corner_radius=12, border_width=1,
@@ -25,8 +35,10 @@ def _metric(parent, icon, value, label, color):
                  text_color=c["text_muted"]).pack(pady=(2, 10))
     return card
 
-
 class AQIPage(ctk.CTkFrame):
+    """
+    The main Air Quality Index view controller.
+    """
     TIMELINES = {"Last Day": 1, "Last Week": 7, "Last Month": 30}
 
     def __init__(self, parent, *, app):
@@ -36,42 +48,47 @@ class AQIPage(ctk.CTkFrame):
         self._city = ""
         self._days = 7
 
+        # Allow the frame to expand and fill the available screen space
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
         self._build_ui()
         theme.on_change(self._retheme)
 
-    # ── public API ─────────────────────────────────────────────────────────────
+    # ─── Public API (Controlled by app.py) ─────────────────────────────────────
 
     def set_city(self, city: str):
+        """Updates the active geography state and triggers a data fetch."""
         self._city = city
         if hasattr(self, "_city_lbl"):
             self._city_lbl.configure(text=f"📍  {city}")
         self._fetch()
 
     def set_days(self, days: int):
+        """Updates the chronological window and repaints the timeline toggle buttons."""
         self._days = days
-        # Highlight the matching button
+        
+        # Visually highlight the currently selected timeline button
         for lbl, d in self.TIMELINES.items():
             btn = self._tl_btns.get(lbl)
             if btn:
                 c = theme.get()
                 if d == days:
-                    btn.configure(fg_color=c["accent2"],
-                                   text_color="#FFFFFF")
+                    btn.configure(fg_color=c["accent2"], text_color="#FFFFFF")
                 else:
-                    btn.configure(fg_color=c["card"],
-                                   text_color=c["text_muted"])
+                    btn.configure(fg_color=c["card"], text_color=c["text_muted"])
+                    
         if self._city:
             self._fetch()
 
     def on_show(self):
+        """Lifecycle hook executed when the page is brought to the front."""
         pass
 
-    # ── build ──────────────────────────────────────────────────────────────────
+    # ─── UI Construction ───────────────────────────────────────────────────────
 
     def _build_ui(self):
+        """Constructs the static layout skeleton of the dashboard."""
         c = theme.get()
         self._scroll = ctk.CTkScrollableFrame(
             self, fg_color=c["bg"],
@@ -80,7 +97,7 @@ class AQIPage(ctk.CTkFrame):
         self._scroll.grid(row=0, column=0, sticky="nsew")
         self._scroll.grid_columnconfigure(0, weight=1)
 
-        # ── header card ────────────────────────────────────────────────────────
+        # ── Header Card ────────────────────────────────────────────────────────
         head = ctk.CTkFrame(self._scroll, fg_color=c["surface"],
                             corner_radius=14, border_width=1,
                             border_color=c["border"])
@@ -98,7 +115,7 @@ class AQIPage(ctk.CTkFrame):
                                        text_color=c["text_muted"])
         self._city_lbl.grid(row=1, column=0, sticky="w", padx=18)
 
-        # Timeline buttons
+        # ── Timeline Toggle Buttons ────────────────────────────────────────────
         tl_frame = ctk.CTkFrame(head, fg_color="transparent")
         tl_frame.grid(row=1, column=1, sticky="e", padx=18)
         self._tl_btns = {}
@@ -115,43 +132,38 @@ class AQIPage(ctk.CTkFrame):
             btn.pack(side="left", padx=4)
             self._tl_btns[lbl] = btn
 
-        # Metric row
+        # ── Dynamic Metrics Row ────────────────────────────────────────────────
         self._metrics_row = ctk.CTkFrame(head, fg_color="transparent")
         self._metrics_row.grid(row=2, column=0, columnspan=2,
                                 sticky="ew", padx=14, pady=(6, 14))
 
-        # Status
+        # Status Indicator for loading/errors
         self._status = ctk.CTkLabel(
             self._scroll, text="Enter a city via the search bar to load AQI data.",
             font=theme.font(11), text_color=c["text_muted"],
         )
         self._status.grid(row=1, column=0, pady=8)
 
-        # Chart containers
+        # ── Chart Containers ───────────────────────────────────────────────────
         self._gauge_row = ctk.CTkFrame(self._scroll, fg_color="transparent")
-        self._gauge_row.grid(row=2, column=0, sticky="ew",
-                              padx=20, pady=(4, 0))
+        self._gauge_row.grid(row=2, column=0, sticky="ew", padx=20, pady=(4, 0))
         self._gauge_row.grid_columnconfigure(0, weight=2)
         self._gauge_row.grid_columnconfigure(1, weight=3)
 
-        self._gauge_frame = ctk.CTkFrame(self._gauge_row,
-                                          fg_color="transparent")
+        self._gauge_frame = ctk.CTkFrame(self._gauge_row, fg_color="transparent")
         self._gauge_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
 
-        self._bar_frame = ctk.CTkFrame(self._gauge_row,
-                                        fg_color="transparent")
+        self._bar_frame = ctk.CTkFrame(self._gauge_row, fg_color="transparent")
         self._bar_frame.grid(row=0, column=1, sticky="nsew")
 
-        self._trend_frame = ctk.CTkFrame(self._scroll,
-                                          fg_color="transparent")
-        self._trend_frame.grid(row=3, column=0, sticky="ew",
-                                padx=20, pady=(8, 20))
+        self._trend_frame = ctk.CTkFrame(self._scroll, fg_color="transparent")
+        self._trend_frame.grid(row=3, column=0, sticky="ew", padx=20, pady=(8, 20))
         self._trend_frame.grid_columnconfigure(0, weight=1)
 
-        # AQI legend
         self._build_legend()
 
     def _build_legend(self):
+        """Constructs the static EPA AQI color-code legend at the bottom of the page."""
         c = theme.get()
         leg = ctk.CTkFrame(self._scroll, fg_color=c["surface"],
                             corner_radius=12, border_width=1,
@@ -173,9 +185,10 @@ class AQIPage(ctk.CTkFrame):
                           font=theme.font(8),
                           text_color="#000000").pack(expand=True)
 
-    # ── fetch & callbacks ──────────────────────────────────────────────────────
+    # ─── Asynchronous Data Ingestion ───────────────────────────────────────────
 
     def _fetch(self):
+        """Spawns a background daemon thread to fetch API data without blocking the UI."""
         if not self._city:
             return
         self._set_status("⏳  Loading AQI data…")
@@ -185,11 +198,13 @@ class AQIPage(ctk.CTkFrame):
 
         def worker():
             data = db.fetch_historic_aqi(city, days)
+            # Safely pass execution back to the main Tkinter thread
             self.after(0, lambda: self._on_data_ready(data))
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_data_ready(self, df):
+        """Callback executed on the main thread once the Pandas DataFrame is ready."""
         self._set_status("")
         if df is None or df.empty:
             self._set_status("⚠️  No AQI data returned.")
@@ -198,11 +213,12 @@ class AQIPage(ctk.CTkFrame):
         self._clear_metrics()
         self._clear_charts()
 
-        # ── metrics ────────────────────────────────────────────────────────────
+        # ─── Metric Aggregation ────────────────────────────────────────────────
         c = theme.get()
         for i in range(5):
             self._metrics_row.grid_columnconfigure(i, weight=1)
 
+        # Mathematical averages over the selected temporal window
         pm25_avg = df["pm2_5"].mean() if "pm2_5" in df.columns else 0
         pm10_avg = df["pm10"].mean()  if "pm10"  in df.columns else 0
         pm25_max = df["pm2_5"].max()  if "pm2_5" in df.columns else 0
@@ -211,6 +227,7 @@ class AQIPage(ctk.CTkFrame):
 
         lvl, col = db.aqi_level(pm25_avg)
 
+        # Stamp out the UI metric cards
         for i, (ico, val, lbl, color) in enumerate([
             ("🔴", f"{pm25_avg:.1f}", "Avg PM2.5", col),
             ("🟠", f"{pm10_avg:.1f}", "Avg PM10",  c["warning"]),
@@ -221,17 +238,15 @@ class AQIPage(ctk.CTkFrame):
             card = _metric(self._metrics_row, ico, val, lbl, color)
             card.grid(row=0, column=i, padx=4, sticky="nsew")
 
-        # AQI level badge
+        # Dynamic AQI Danger Level Badge
         badge = ctk.CTkFrame(
             self._metrics_row, fg_color=col, corner_radius=8, height=32,
         )
-        badge.grid(row=1, column=0, columnspan=5,
-                   sticky="ew", padx=4, pady=(6, 0))
+        badge.grid(row=1, column=0, columnspan=5, sticky="ew", padx=4, pady=(6, 0))
         ctk.CTkLabel(badge, text=f"Air Quality: {lvl}",
-                     font=theme.font(12, "bold"),
-                     text_color="#000000").pack(pady=4)
+                     font=theme.font(12, "bold"), text_color="#000000").pack(pady=4)
 
-        # ── charts ─────────────────────────────────────────────────────────────
+        # ─── Chart Rendering ───────────────────────────────────────────────────
         dark = theme.is_dark()
         days = self._days
 
@@ -245,7 +260,7 @@ class AQIPage(ctk.CTkFrame):
         trend_fig = charts.aqi_trend_chart(df, days=days, dark=dark)
         charts.embed(trend_fig, self._trend_frame)
 
-    # ── helpers ────────────────────────────────────────────────────────────────
+    # ─── UI Reset Helpers ──────────────────────────────────────────────────────
 
     def _clear_metrics(self):
         for w in self._metrics_row.winfo_children():

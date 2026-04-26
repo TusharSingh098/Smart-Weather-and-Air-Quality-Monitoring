@@ -1,4 +1,25 @@
-weather_data/
+# --- Python Architecture ---
 __pycache__/
-*.pkl
+*.pyc
+*.pyo
+*.pyd
+
+# --- Virtual Environments ---
+venv/
+env/
+.venv/
+
+# --- IDEs & OS Files ---
 .vscode/
+.idea/
+.DS_Store
+
+# --- Project Specific Data & Models ---
+# Ignores downloaded API datasets and trained binaries
+weather_data/
+*.pkl
+
+# --- System Logs & Generated Charts ---
+# Ignores the reality-sync CSVs and diagnostic graphs generated during runtime
+logs/prediction_audit.csv
+logs/analysis/*.png

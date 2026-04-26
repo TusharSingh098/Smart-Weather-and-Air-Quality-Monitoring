@@ -1,176 +1,119 @@
+"""
+api_engine/mass_ingestion.py
+Automated ETL pipeline for bulk historical data collection and preprocessing.
+Synchronizes Weather and AQI data into a training-ready unified matrix.
+
+Author: Team PyChaoS
+College: NIT Kurukshetra
+"""
+
+import os
+import sys
+import time
 import numpy as np
 import pandas as pd
 
-class DecisionNode:
-    def __init__(self, X_matrix, gradients, hessians, row_indices, col_sample_rate=0.8, 
-                 min_samples=5, min_hessian_sum=1, max_depth=5, reg_lambda=1, 
-                 split_gamma=1):
-        self.X_matrix = X_matrix
-        self.gradients = gradients
-        self.hessians = hessians
-        self.row_indices = row_indices 
-        self.max_depth = max_depth
-        self.min_samples = min_samples
-        self.reg_lambda = reg_lambda
-        self.split_gamma = split_gamma
-        self.min_hessian_sum = min_hessian_sum
-        
-        self.n_rows = len(row_indices)
-        self.n_cols = X_matrix.shape[1]
-        self.col_sample_rate = col_sample_rate
-        
-        self.active_features = np.random.permutation(self.n_cols)[:max(1, round(self.col_sample_rate * self.n_cols))]
-        
-        self.leaf_weight = self._compute_weight(self.gradients[self.row_indices], self.hessians[self.row_indices])
-        
-        self.max_gain = float('-inf')
-        self.best_feature_idx = None
-        self.split_threshold = None
-        
-        if self.max_depth > 0 and self.n_rows >= 2 * self.min_samples:
-            self._evaluate_splits_vectorized()
-            
-        if not self.is_terminal:
-            self._create_children()
+# ─── Environment Configuration ────────────────────────────────────────────────
+# Dynamically locate project root to ensure absolute import stability
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(project_root)
 
-    def _compute_weight(self, grad_array, hess_array):
-        return (-np.sum(grad_array) / (np.sum(hess_array) + self.reg_lambda))
+from api_engine.weather_api import WeatherBase, AirQuality
+from ml_engine.geography import TARGET_REGIONS
 
-    def _evaluate_splits_vectorized(self):
-        for feature_idx in self.active_features:
-            f_vals = self.X_matrix[self.row_indices, feature_idx]
-            g = self.gradients[self.row_indices]
-            h = self.hessians[self.row_indices]
-
-            sort_idx = np.argsort(f_vals)
-            f_sorted = f_vals[sort_idx]
-            g_sorted = g[sort_idx]
-            h_sorted = h[sort_idx]
-
-            G_l = np.cumsum(g_sorted)
-            H_l = np.cumsum(h_sorted)
-            G_total, H_total = G_l[-1], H_l[-1]
-            G_r, H_r = G_total - G_l, H_total - H_l
-
-            gain = 0.5 * (
-                (G_l**2 / (H_l + self.reg_lambda)) + 
-                (G_r**2 / (H_r + self.reg_lambda)) - 
-                (G_total**2 / (H_total + self.reg_lambda))
-            ) - self.split_gamma
-
-            mask = (np.arange(self.n_rows) >= self.min_samples) & \
-                   (np.arange(self.n_rows) <= (self.n_rows - self.min_samples)) & \
-                   (H_l >= self.min_hessian_sum) & (H_r >= self.min_hessian_sum)
-
-            if np.any(mask):
-                best_idx_in_mask = np.argmax(gain[mask])
-                actual_idx = np.where(mask)[0][best_idx_in_mask]
-                
-                if gain[actual_idx] > self.max_gain:
-                    self.max_gain = gain[actual_idx]
-                    self.best_feature_idx = feature_idx
-                    self.split_threshold = f_sorted[actual_idx]
-
-    def _create_children(self):
-        split_col = self.X_matrix[self.row_indices, self.best_feature_idx]
-        left_idx = np.where(split_col <= self.split_threshold)[0]
-        right_idx = np.where(split_col > self.split_threshold)[0]
-        
-        self.left_child = DecisionNode(self.X_matrix, self.gradients, self.hessians, self.row_indices[left_idx], 
-                                       self.col_sample_rate, self.min_samples, self.min_hessian_sum, 
-                                       self.max_depth - 1, self.reg_lambda, self.split_gamma)
-        self.right_child = DecisionNode(self.X_matrix, self.gradients, self.hessians, self.row_indices[right_idx], 
-                                        self.col_sample_rate, self.min_samples, self.min_hessian_sum, 
-                                        self.max_depth - 1, self.reg_lambda, self.split_gamma)
-
-    @property
-    def is_terminal(self):
-        return self.best_feature_idx is None or self.max_depth <= 0
-
-    def predict_vectorized(self, X):
-        preds = np.zeros(X.shape[0])
-        self._predict_recursive(X, np.arange(X.shape[0]), preds)
-        return preds
-
-    def _predict_recursive(self, X, indices, preds):
-        if self.is_terminal:
-            preds[indices] = self.leaf_weight
-            return
-        
-        feat_vals = X[indices, self.best_feature_idx]
-        left_mask = feat_vals <= self.split_threshold
-        
-        if np.any(left_mask):
-            self.left_child._predict_recursive(X, indices[left_mask], preds)
-        if np.any(~left_mask):
-            self.right_child._predict_recursive(X, indices[~left_mask], preds)
-
-class CustomXGBRegressor:
-    def __init__(self):
-        self.tree_ensemble = []
-        self.base_pred = None
-
-    def fit(self, X_train, y_train, n_trees=10, max_depth=3, eta=0.3, reg_lambda=1.0, 
-            split_gamma=0.1, min_samples=5, col_sample_rate=0.8):
-        
-        X_train = np.array(X_train)
-        y_train = np.array(y_train)
-        self.base_pred = np.mean(y_train)
-        current_preds = np.full(y_train.shape, self.base_pred)
-
-        for i in range(n_trees):
-            grads = 2 * (current_preds - y_train)
-            hesss = np.full(y_train.shape, 2.0)
-            
-            tree = DecisionNode(X_train, grads, hesss, np.arange(len(X_train)), 
-                                col_sample_rate, min_samples, 1, max_depth, 
-                                reg_lambda, split_gamma)
-            
-            tree_preds = tree.predict_vectorized(X_train)
-            current_preds += eta * tree_preds
-            self.tree_ensemble.append((tree, eta))
-
-    def predict(self, X):
-        X = np.array(X)
-        preds = np.full(X.shape[0], self.base_pred)
-        for tree, eta in self.tree_ensemble:
-            preds += eta * tree.predict_vectorized(X)
-        return preds
+def run_mass_ingestion(num_days: int = 30):
+    """
+    Executes the bulk ingestion protocol across all target regions.
     
-class CustomXGBClassifier:
-    def __init__(self):
-        self.tree_ensemble = []
-        self.base_score = 0.0
+    Args:
+        num_days (int): The historical window size in days (default 30).
+    """
+    print("==================================================")
+    print(" Initiating Enterprise Mass Ingestion Protocol")
+    print(f" Target History Window: {num_days} days")
+    print("==================================================\n")
 
-    @staticmethod
-    def _apply_sigmoid(x):
-        return 1 / (1 + np.exp(-x))
+    # Initialize API Clients
+    weather_client = WeatherBase()
+    aqi_client = AirQuality()
 
-    def fit(self, X_train, y_train, n_trees=10, max_depth=3, eta=0.3, reg_lambda=1.0, 
-            split_gamma=0.1, min_samples=5, col_sample_rate=0.8):
+    # Iterate through State-level hierarchies
+    for state, districts in TARGET_REGIONS.items():
+        print(f"\n>>> PROCESSING STATE: {state.replace('_', ' ')} ({len(districts)} Districts) <<<")
         
-        X_train = np.array(X_train)
-        y_train = np.array(y_train)
-        current_preds = np.full(y_train.shape, self.base_score)
+        # Setup filesystem structure for data persistence
+        state_data_dir = os.path.join(project_root, "weather_data", state)
+        weather_client.data_dir = state_data_dir
+        aqi_client.data_dir = state_data_dir
 
-        for _ in range(n_trees):
-            probs = self._apply_sigmoid(current_preds)
-            grads = probs - y_train
-            hesss = probs * (1 - probs)
+        # Process individual Districts within the State
+        for district in districts:
+            print(f"  -> Extracting data for {district}...")
+            district_path = os.path.join(state_data_dir, district)
+            os.makedirs(district_path, exist_ok=True)
             
-            tree = DecisionNode(X_train, grads, hesss, np.arange(len(X_train)), 
-                                col_sample_rate, min_samples, 1, max_depth, 
-                                reg_lambda, split_gamma)
-            
-            current_preds += eta * tree.predict_vectorized(X_train)
-            self.tree_ensemble.append((tree, eta))
+            try:
+                # 1. Geolocation Anchor: Resolve district names to Lat/Long coordinates
+                if weather_client.geolocator(district):
+                    
+                    # 2. Extract Weather Data & Prune redundant features
+                    w_df = weather_client.historic_data(num_days=num_days)
+                    if w_df is not None:
+                        w_df = w_df.drop(columns=[
+                            'dew_point_2m', 'apparent_temperature', 'weather_code', 
+                            'snowfall', 'precipitation'
+                        ], errors='ignore')
 
-    def predict_proba(self, X):
-        X = np.array(X)
-        raw_output = np.full(X.shape[0], self.base_score)
-        for tree, eta in self.tree_ensemble:
-            raw_output += eta * tree.predict_vectorized(X)
-        return self._apply_sigmoid(raw_output)
+                    # 3. Extract AQI Data & Prune redundant features
+                    aqi_client.location = weather_client.location
+                    aqi_client.place = district
+                    a_df = aqi_client.air_quality_data(num_days=num_days)
+                    if a_df is not None:
+                        a_df = a_df.drop(columns=[
+                            "ozone", "nitrogen_dioxide", "carbon_monoxide", 
+                            "sulphur_dioxide", "carbon_dioxide"
+                        ], errors='ignore')
+                    
+                    # 4. Data Integration: Merge Weather and AQI on 'time' index
+                    if w_df is not None and a_df is not None:
+                        merged_df = pd.merge(w_df, a_df, on='time', how='inner')
 
-    def predict(self, X):
-        return (self.predict_proba(X) > 0.5).astype(int)
+                        # 5. Feature Engineering: Trigonometric Periodic Encoding
+                        # Converts 0-360 degrees into continuous Sin/Cos components
+                        if 'wind_direction_10m' in merged_df.columns:
+                            wind_radians = merged_df['wind_direction_10m'] * np.pi / 180
+                            merged_df['wind_dir_sin'] = np.sin(wind_radians)
+                            merged_df['wind_dir_cos'] = np.cos(wind_radians)
+                            merged_df = merged_df.drop(columns=['wind_direction_10m'])
+
+                        # 6. Persistence: Save unified matrix for ML Training
+                        final_filename = "training_ready_unified.csv"
+                        final_filepath = os.path.join(district_path, final_filename)
+                        merged_df.to_csv(final_filepath, index=False)
+                        print("      [SUCCESS] Unified Matrix Saved.")
+                        
+                        # 7. Cleanup: Purge raw cache files to maintain storage integrity
+                        for filename in os.listdir(district_path):
+                            if filename.endswith(".csv") and filename != final_filename:
+                                file_to_delete = os.path.join(district_path, filename)
+                                os.remove(file_to_delete)
+                                print(f"      [CLEANUP] Deleted raw cache: {filename}")
+                                
+                    else:
+                        print("      [PARTIAL DATA / FAIL] Missing API data.")
+                else:
+                    print("      [GEOLOCATION FAILED]")
+                
+                # API Rate Limiting: Respect Open-Meteo's non-commercial usage tier
+                time.sleep(2.0) 
+                
+            except Exception as e:
+                print(f"      [CRITICAL ERROR]: {e}")
+
+    print("\n==================================================")
+    print(" Mass Ingestion Protocol Complete.")
+    print("==================================================")
+
+if __name__ == "__main__":
+    # Execute 1-year ingestion for high-variance seasonal training data
+    run_mass_ingestion(num_days=365)

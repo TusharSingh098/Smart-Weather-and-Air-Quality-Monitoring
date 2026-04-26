@@ -1,6 +1,6 @@
 # 🌦️ Smart Weather and Air Quality Monitoring System
 
-A comprehensive, data-driven desktop application for **real-time weather monitoring and air quality analysis**, powered by **API ingestion, XGBoost machine learning pipelines, and an interactive CustomTkinter dashboard**.
+A comprehensive, data-driven desktop application for **real-time weather monitoring, air quality analysis, and ML-driven forecasting**. Powered by **API ingestion, self-healing XGBoost pipelines, and an interactive CustomTkinter Single-Page Application (SPA) dashboard**.
 
 Built by **Team PyChaoS** from NIT Kurukshetra.
 
@@ -9,11 +9,12 @@ Built by **Team PyChaoS** from NIT Kurukshetra.
 ## 📌 Overview
 
 This project integrates:
-- 🌐 **Weather & AQI Data Ingestion:** Real-time data from the Open-Meteo API.
-- 🧠 **Machine Learning Engine:** Self-healing, multi-target XGBoost pipelines for next-day forecasting.
-- 📊 **Interactive UI Dashboard:** A threaded, Single-Page Application (SPA) with Dark/Light mode and dynamic Matplotlib rendering.
+- 🌐 **Weather & AQI Data Ingestion:** Real-time, asynchronous data from the Open-Meteo API.
+- 🧠 **Machine Learning Engine:** Multi-target XGBoost pipelines for next-day Max/Min temperature, humidity, and rain probability forecasting.
+- 🔬 **Scientific Validation Suite:** Built-in backtesting, Feature Importance extraction (Information Gain), and Gaussian Residual Analysis to mathematically prove model accuracy.
+- 📊 **Interactive UI Dashboard:** A threaded SPA with Dark/Light mode, dynamic Matplotlib rendering, and mathematically synthesized diurnal curves.
 
-The system is designed with a modular, decoupled architecture, separating the backend ML logic from the frontend UI presentation.
+The system is designed with a strictly decoupled architecture, separating the backend mathematical logic from the frontend UI presentation via a Facade pattern.
 
 ---
 
@@ -22,15 +23,17 @@ The system is designed with a modular, decoupled architecture, separating the ba
 ```text
 Smart-Weather-and-Air-Quality-Monitoring/
 │
-├── app.py                   # Main application entry point
+├── app.py                   # Main application entry point & UI Router
 ├── run_ml_pipeline.py       # ML training orchestrator
+├── run_backtest.py          # Reality-sync daemon for MAE accuracy tracking
 ├── requirements.txt         # Project dependencies
 │
-├── api_engine/              # External data routing
-├── ml_engine/               # XGBoost models & data processing
-├── ui_engine/               # CustomTkinter SPA & charts
+├── api_engine/              # External data routing & geographic resolution
+├── ml_engine/               # XGBoost algorithms, diagnostic tools, & data prep
+├── ui_engine/               # CustomTkinter SPA, Matplotlib charts, & view controllers
 │
-├── weather_data/            # Stored .pkl ML models
+├── weather_data/            # Stored .pkl ML models & processed training CSVs
+├── logs/                    # Prediction audit CSVs and generated analysis charts
 └── assets/                  # UI icons and team logos
 ```
 
@@ -44,29 +47,32 @@ Handles all external data interactions with graceful fallback mechanisms.
 * `mass_ingestion.py`: Bulk data collection for training datasets and historical analysis.
 
 ### 🧠 ML Engine (`ml_engine/`)
-The analytical backbone of the system.
-* `master_training.py`: Orchestrates the automated model training workflow.
-* `multi_target_pipeline.py`: Handles multi-output predictions (e.g., AQI + weather metrics).
-* `custom_xgboost_educational.py`: Custom implementation of XGBoost to demonstrate the inner workings of boosting algorithms.
-* `inference_engine.py`: Runs trained `.pkl` models on new live data.
-* `geography.py`: Handles state/district location boundaries for targeted predictions.
+The analytical and diagnostic backbone of the system.
+* `multi_target_pipeline.py`: Assembles lag-feature matrices and handles multi-output predictions.
+* `master_training.py`: Orchestrates the automated `.pkl` model training workflow.
+* `inference_engine.py`: Runs trained models on live T-Zero vectors.
+* `performance_monitor.py`: Logs system predictions to calculate real-time Mean Absolute Error (MAE).
+* `evaluator.py`: Extracts and visualizes Information Gain to show *how* the AI makes decisions.
+* `residual_analyzer.py`: Plots error distributions against a perfect Gaussian Bell Curve.
 
 ### 🎨 UI Engine (`ui_engine/`)
 A threaded, non-blocking GUI built with CustomTkinter.
-* `page_*.py`: Modular view files (Home, Weather, AQI) swapped dynamically via `tkraise()`.
-* `charts.py`: Matplotlib and Seaborn integration for dynamic 24-hour and historic trend visualizations.
-* `data_bridge.py`: The secure firewall connecting the backend ML/API data to the UI.
-* `theme.py`: Pub/Sub architecture for real-time Dark/Light mode toggling.
+* `app.py` & `sidebar.py`: Zero-load SPA routing via memory-cached UI frames.
+* `page_*.py`: Modular view controllers (Home, Historic, Today, ML Tomorrow, Diagnostics, AQI).
+* `charts.py`: Dynamic Matplotlib and Seaborn integration for 24-hour trends and custom geometric UI gauges.
+* `data_bridge.py`: The secure interface connecting the backend ML/API data to the UI, featuring offline data synthesis.
+* `theme.py`: Pub/Sub architecture for instantaneous Dark/Light mode toggling.
 
 ---
 
-## 🔄 Workflow
+## 🔄 System Workflow
 
 1. **Data Collection:** APIs fetch real-time weather & AQI data.
-2. **Data Processing:** Cleaned and structured via ingestion scripts.
-3. **Model Training:** Multi-target XGBoost models trained on historic district data.
-4. **Inference:** Live data is pushed through `.pkl` models to generate future anchors.
-5. **Visualization:** Mathematical curves synthesize hourly data, displayed via an interactive SPA.
+2. **Data Processing:** Cleaned, cyclical time features extracted, and structured via ingestion scripts.
+3. **Model Training:** Multi-target XGBoost models trained on historic regional data.
+4. **Inference:** Live data is pushed through models to generate future anchors.
+5. **Visualization:** Mathematical phase-shifted curves synthesize hourly data, displayed via the interactive UI.
+6. **Scientific Validation:** `run_backtest.py` routinely verifies past predictions against actual API reality to monitor model drift and MAE.
 
 ---
 
@@ -82,12 +88,27 @@ pip install -r requirements.txt
 ### ▶️ Running the Project
 
 **1. Run the ML Training Pipeline (First Boot):**
+*Must be run to generate the local `.pkl` binaries.*
 ```bash
 python run_ml_pipeline.py
 ```
-**2. Launch the Application:**
+
+**2. Generate AI Validation Charts (Optional but Recommended):**
+*Generates the Feature Importance and Residual Bell Curves for the UI Diagnostics tab.*
+```bash
+python ml_engine/evaluator.py
+python ml_engine/residual_analyzer.py
+```
+
+**3. Launch the Application:**
 ```bash
 python app.py
+```
+
+**4. Run System Backtest (Daily Maintenance):**
+*Calculates your exact model accuracy (MAE) over time.*
+```bash
+python run_backtest.py
 ```
 
 ---
@@ -96,8 +117,9 @@ python app.py
 
 * **Language:** Python 3.12
 * **Machine Learning:** XGBoost, Scikit-Learn
-* **Data Processing:** Pandas, NumPy
-* **GUI Framework:** CustomTkinter, Tkinter
+* **Mathematics:** NumPy, SciPy (Statistical distributions)
+* **Data Processing:** Pandas
+* **GUI Framework:** CustomTkinter, PIL
 * **Data Visualization:** Matplotlib, Seaborn
 * **Data Source:** Open-Meteo API
 
