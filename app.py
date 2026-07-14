@@ -6,7 +6,7 @@ The primary entry point for the GUI. Assembles the decoupled UI components,
 manages global application state (like the actively searched city), and 
 implements a highly efficient Single-Page Application (SPA) routing protocol.
 
-Author: Team PyChaoS
+Author: Team PyChaos
 College: NIT Kurukshetra
 """
 
