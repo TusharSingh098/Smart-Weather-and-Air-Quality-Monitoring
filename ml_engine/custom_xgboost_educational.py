@@ -1,119 +1,219 @@
-"""
-api_engine/mass_ingestion.py
-Automated ETL pipeline for bulk historical data collection and preprocessing.
-Synchronizes Weather and AQI data into a training-ready unified matrix.
-
-Author: Team PyChaoS
-College: NIT Kurukshetra
-"""
-
-import os
-import sys
-import time
 import numpy as np
 import pandas as pd
 
-# ─── Environment Configuration ────────────────────────────────────────────────
-# Dynamically locate project root to ensure absolute import stability
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.append(project_root)
-
-from api_engine.weather_api import WeatherBase, AirQuality
-from ml_engine.geography import TARGET_REGIONS
-
-def run_mass_ingestion(num_days: int = 30):
-    """
-    Executes the bulk ingestion protocol across all target regions.
-    
-    Args:
-        num_days (int): The historical window size in days (default 30).
-    """
-    print("==================================================")
-    print(" Initiating Enterprise Mass Ingestion Protocol")
-    print(f" Target History Window: {num_days} days")
-    print("==================================================\n")
-
-    # Initialize API Clients
-    weather_client = WeatherBase()
-    aqi_client = AirQuality()
-
-    # Iterate through State-level hierarchies
-    for state, districts in TARGET_REGIONS.items():
-        print(f"\n>>> PROCESSING STATE: {state.replace('_', ' ')} ({len(districts)} Districts) <<<")
+class DecisionNode:
+    def __init__(self, X_matrix, gradients, hessians, row_indices, col_sample_rate=0.8, min_samples=5, min_hessian_sum=1, max_depth=10, reg_lambda=1, split_gamma=1, bin_eps=0.1):
+        self.X_matrix, self.gradients, self.hessians = X_matrix, gradients, hessians
+        self.row_indices = row_indices 
+        self.max_depth = max_depth
+        self.min_samples = min_samples
+        self.reg_lambda = reg_lambda
+        self.split_gamma  = split_gamma
+        self.min_hessian_sum = min_hessian_sum
+        self.n_rows = len(row_indices)
+        self.n_cols = X_matrix.shape[1]
+        self.col_sample_rate = col_sample_rate
+        self.bin_eps = bin_eps
+        self.active_features = np.random.permutation(self.n_cols)[:round(self.col_sample_rate * self.n_cols)]
+        self.leaf_weight = self._compute_weight(self.gradients[self.row_indices], self.hessians[self.row_indices])
+        self.max_gain = float('-inf')
+        self._evaluate_splits()
         
-        # Setup filesystem structure for data persistence
-        state_data_dir = os.path.join(project_root, "weather_data", state)
-        weather_client.data_dir = state_data_dir
-        aqi_client.data_dir = state_data_dir
-
-        # Process individual Districts within the State
-        for district in districts:
-            print(f"  -> Extracting data for {district}...")
-            district_path = os.path.join(state_data_dir, district)
-            os.makedirs(district_path, exist_ok=True)
+    def _compute_weight(self, grad_array, hess_array):
+        return (-np.sum(grad_array) / (np.sum(hess_array) + self.reg_lambda))
+        
+    def _evaluate_splits(self):
+        for feature_idx in self.active_features: 
+            self._search_exact_split(feature_idx)
+        if self.is_terminal: 
+            return
+        split_column = self.split_array
+        left_mask = np.nonzero(split_column <= self.split_threshold)[0]
+        right_mask = np.nonzero(split_column > self.split_threshold)[0]
+        self.left_child = DecisionNode(X_matrix=self.X_matrix, gradients=self.gradients, hessians=self.hessians, row_indices=self.row_indices[left_mask], min_samples=self.min_samples, max_depth=self.max_depth-1, reg_lambda=self.reg_lambda, split_gamma=self.split_gamma, min_hessian_sum=self.min_hessian_sum, bin_eps=self.bin_eps, col_sample_rate=self.col_sample_rate)
+        self.right_child = DecisionNode(X_matrix=self.X_matrix, gradients=self.gradients, hessians=self.hessians, row_indices=self.row_indices[right_mask], min_samples=self.min_samples, max_depth=self.max_depth-1, reg_lambda=self.reg_lambda, split_gamma=self.split_gamma, min_hessian_sum=self.min_hessian_sum, bin_eps=self.bin_eps, col_sample_rate=self.col_sample_rate)
+        
+    def _search_exact_split(self, feature_idx):
+        feature_vals = self.X_matrix[self.row_indices, feature_idx]
+        for row in range(self.n_rows):
+            left_bool = feature_vals <= feature_vals[row]
+            right_bool = feature_vals > feature_vals[row]
+            left_idx = np.nonzero(feature_vals <= feature_vals[row])[0]
+            right_idx = np.nonzero(feature_vals > feature_vals[row])[0]
             
-            try:
-                # 1. Geolocation Anchor: Resolve district names to Lat/Long coordinates
-                if weather_client.geolocator(district):
-                    
-                    # 2. Extract Weather Data & Prune redundant features
-                    w_df = weather_client.historic_data(num_days=num_days)
-                    if w_df is not None:
-                        w_df = w_df.drop(columns=[
-                            'dew_point_2m', 'apparent_temperature', 'weather_code', 
-                            'snowfall', 'precipitation'
-                        ], errors='ignore')
+            if (right_bool.sum() < self.min_samples or left_bool.sum() < self.min_samples 
+                or self.hessians[left_idx].sum() < self.min_hessian_sum
+                or self.hessians[right_idx].sum() < self.min_hessian_sum): 
+                continue
 
-                    # 3. Extract AQI Data & Prune redundant features
-                    aqi_client.location = weather_client.location
-                    aqi_client.place = district
-                    a_df = aqi_client.air_quality_data(num_days=num_days)
-                    if a_df is not None:
-                        a_df = a_df.drop(columns=[
-                            "ozone", "nitrogen_dioxide", "carbon_monoxide", 
-                            "sulphur_dioxide", "carbon_dioxide"
-                        ], errors='ignore')
-                    
-                    # 4. Data Integration: Merge Weather and AQI on 'time' index
-                    if w_df is not None and a_df is not None:
-                        merged_df = pd.merge(w_df, a_df, on='time', how='inner')
-
-                        # 5. Feature Engineering: Trigonometric Periodic Encoding
-                        # Converts 0-360 degrees into continuous Sin/Cos components
-                        if 'wind_direction_10m' in merged_df.columns:
-                            wind_radians = merged_df['wind_direction_10m'] * np.pi / 180
-                            merged_df['wind_dir_sin'] = np.sin(wind_radians)
-                            merged_df['wind_dir_cos'] = np.cos(wind_radians)
-                            merged_df = merged_df.drop(columns=['wind_direction_10m'])
-
-                        # 6. Persistence: Save unified matrix for ML Training
-                        final_filename = "training_ready_unified.csv"
-                        final_filepath = os.path.join(district_path, final_filename)
-                        merged_df.to_csv(final_filepath, index=False)
-                        print("      [SUCCESS] Unified Matrix Saved.")
-                        
-                        # 7. Cleanup: Purge raw cache files to maintain storage integrity
-                        for filename in os.listdir(district_path):
-                            if filename.endswith(".csv") and filename != final_filename:
-                                file_to_delete = os.path.join(district_path, filename)
-                                os.remove(file_to_delete)
-                                print(f"      [CLEANUP] Deleted raw cache: {filename}")
-                                
-                    else:
-                        print("      [PARTIAL DATA / FAIL] Missing API data.")
-                else:
-                    print("      [GEOLOCATION FAILED]")
+            current_gain = self._calculate_gain(left_bool, right_bool)
+            if current_gain > self.max_gain: 
+                self.best_feature_idx = feature_idx
+                self.max_gain = current_gain
+                self.split_threshold = feature_vals[row]
                 
-                # API Rate Limiting: Respect Open-Meteo's non-commercial usage tier
-                time.sleep(2.0) 
+    def _search_approx_split(self, feature_idx):
+        feature_vals = self.X_matrix[self.row_indices, feature_idx]
+        local_hessians = self.hessians[self.row_indices]
+        stats_df = pd.DataFrame({'val': feature_vals, 'h': local_hessians})
+        stats_df.sort_values(by=['val'], ascending=True, inplace=True)
+        total_h = stats_df['h'].sum() 
+        stats_df['rank_score'] = stats_df.apply(lambda row_val: (1/total_h) * sum(stats_df[stats_df['val'] < row_val['val']]['h']), axis=1)
+        
+        for i in range(stats_df.shape[0]-1):
+            rank_j, rank_j_next = stats_df['rank_score'].iloc[i:i+2]
+            if abs(rank_j - rank_j_next) >= self.bin_eps:
+                continue
                 
-            except Exception as e:
-                print(f"      [CRITICAL ERROR]: {e}")
+            candidate_threshold = (stats_df['rank_score'].iloc[i+1] + stats_df['rank_score'].iloc[i]) / 2
+            left_bool = feature_vals <= candidate_threshold
+            right_bool = feature_vals > candidate_threshold
+            
+            left_idx = np.nonzero(feature_vals <= candidate_threshold)[0]
+            right_idx = np.nonzero(feature_vals > candidate_threshold)[0]
+            
+            if (right_bool.sum() < self.min_samples or left_bool.sum() < self.min_samples 
+                or self.hessians[left_idx].sum() < self.min_hessian_sum
+                or self.hessians[right_idx].sum() < self.min_hessian_sum): 
+                continue
+                
+            current_gain = self._calculate_gain(left_bool, right_bool)
+            if current_gain > self.max_gain: 
+                self.best_feature_idx = feature_idx
+                self.max_gain = current_gain
+                self.split_threshold = candidate_threshold
+                
+    def _calculate_gain(self, left_mask, right_mask):
+        local_grad = self.gradients[self.row_indices]
+        local_hess = self.hessians[self.row_indices]
+        
+        sum_grad_l = local_grad[left_mask].sum()
+        sum_hess_l = local_hess[left_mask].sum()
+        sum_grad_r = local_grad[right_mask].sum()
+        sum_hess_r = local_hess[right_mask].sum()
+        
+        term_left = (sum_grad_l ** 2) / (sum_hess_l + self.reg_lambda)
+        term_right = (sum_grad_r ** 2) / (sum_hess_r + self.reg_lambda)
+        term_root = ((sum_grad_l + sum_grad_r) ** 2) / (sum_hess_l + sum_hess_r + self.reg_lambda)
+        
+        return 0.5 * (term_left + term_right - term_root) - self.split_gamma
+                
+    @property
+    def split_array(self):
+        return self.X_matrix[self.row_indices, self.best_feature_idx]
+                
+    @property
+    def is_terminal(self):
+        return self.max_gain == float('-inf') or self.max_depth <= 0                 
 
-    print("\n==================================================")
-    print(" Mass Ingestion Protocol Complete.")
-    print("==================================================")
+    def predict_matrix(self, X_eval):
+        return np.array([self._predict_single(vector) for vector in X_eval])
+    
+    def _predict_single(self, vector):
+        if self.is_terminal:
+            return self.leaf_weight
+        next_node = self.left_child if vector[self.best_feature_idx] <= self.split_threshold else self.right_child
+        return next_node._predict_single(vector)
 
-if __name__ == "__main__":
-    # Execute 1-year ingestion for high-variance seasonal training data
-    run_mass_ingestion(num_days=365)
+class GradientTree:
+    def fit(self, X_train, grads, hesss, col_sample_rate=0.8, min_samples=5, min_hessian_sum=1, max_depth=10, reg_lambda=1, split_gamma=1, bin_eps=0.1):
+        self.root_node = DecisionNode(X_train, grads, hesss, np.array(np.arange(len(X_train))), col_sample_rate, min_samples, min_hessian_sum, max_depth, reg_lambda, split_gamma, bin_eps)
+        return self
+    
+    def predict(self, X_eval):
+        return self.root_node.predict_matrix(X_eval)
+   
+class CustomXGBClassifier:
+    def __init__(self):
+        self.tree_ensemble = []
+    
+    @staticmethod
+    def _apply_sigmoid(matrix):
+        return 1 / (1 + np.exp(-matrix))
+    
+    def _compute_gradients(self, raw_preds, targets):
+        probs = self._apply_sigmoid(raw_preds)
+        return (probs - targets)
+    
+    def _compute_hessians(self, raw_preds, targets):
+        probs = self._apply_sigmoid(raw_preds)
+        return (probs * (1 - probs))
+    
+    @staticmethod
+    def compute_log_odds(target_vector):
+        count_pos = np.count_nonzero(target_vector == 1)
+        count_neg = np.count_nonzero(target_vector == 0)
+        return np.log(count_pos / count_neg)
+    
+    def fit(self, X_train, y_train, col_sample_rate=0.8, min_hessian_sum=1, max_depth=5, min_samples=5, eta=0.4, n_trees=5, reg_lambda=1.5, split_gamma=1, bin_eps=0.1):
+        self.X_train, self.y_train = X_train, y_train
+        self.max_depth = max_depth
+        self.col_sample_rate = col_sample_rate
+        self.bin_eps = bin_eps
+        self.min_hessian_sum = min_hessian_sum 
+        self.min_samples = min_samples
+        self.eta = eta
+        self.n_trees = n_trees 
+        self.reg_lambda = reg_lambda
+        self.split_gamma = split_gamma
+    
+        self.current_preds = np.full((X_train.shape[0], 1), 1).flatten().astype('float64')
+    
+        for _ in range(self.n_trees):
+            g_vector = self._compute_gradients(self.current_preds, self.y_train)
+            h_vector = self._compute_hessians(self.current_preds, self.y_train)
+            new_tree = GradientTree().fit(self.X_train, g_vector, h_vector, max_depth=self.max_depth, min_samples=self.min_samples, reg_lambda=self.reg_lambda, split_gamma=self.split_gamma, bin_eps=self.bin_eps, min_hessian_sum=self.min_hessian_sum, col_sample_rate=self.col_sample_rate)
+            self.current_preds += self.eta * new_tree.predict(self.X_train)
+            self.tree_ensemble.append(new_tree)
+          
+    def predict_probabilities(self, X_eval):
+        raw_output = np.zeros(X_eval.shape[0])
+        for tree in self.tree_ensemble:
+            raw_output += self.eta * tree.predict(X_eval) 
+        return self._apply_sigmoid(np.full((X_eval.shape[0], 1), 1).flatten().astype('float64') + raw_output)
+    
+    def predict(self, X_eval):
+        raw_output = np.zeros(X_eval.shape[0])
+        for tree in self.tree_ensemble:
+            raw_output += self.eta * tree.predict(X_eval) 
+        final_probs = self._apply_sigmoid(np.full((X_eval.shape[0], 1), 1).flatten().astype('float64') + raw_output)
+        return np.where(final_probs > np.mean(final_probs), 1, 0)
+
+class CustomXGBRegressor:
+    def __init__(self):
+        self.tree_ensemble = []
+    
+    @staticmethod
+    def _compute_gradients(raw_preds, targets):
+        return 2 * (raw_preds - targets)
+    
+    @staticmethod
+    def _compute_hessians(raw_preds, targets):
+        return np.full((raw_preds.shape[0], 1), 2).flatten().astype('float64')
+    
+    def fit(self, X_train, y_train, col_sample_rate=0.8, min_hessian_sum=1, max_depth=5, min_samples=5, eta=0.4, n_trees=5, reg_lambda=1.5, split_gamma=1, bin_eps=0.1):
+        self.X_train, self.y_train = X_train, y_train
+        self.max_depth = max_depth
+        self.col_sample_rate = col_sample_rate
+        self.bin_eps = bin_eps
+        self.min_hessian_sum = min_hessian_sum 
+        self.min_samples = min_samples
+        self.eta = eta
+        self.n_trees = n_trees 
+        self.reg_lambda = reg_lambda
+        self.split_gamma = split_gamma
+    
+        self.current_preds = np.full((X_train.shape[0], 1), np.mean(y_train)).flatten().astype('float64')
+    
+        for _ in range(self.n_trees):
+            g_vector = self._compute_gradients(self.current_preds, self.y_train)
+            h_vector = self._compute_hessians(self.current_preds, self.y_train)
+            new_tree = GradientTree().fit(self.X_train, g_vector, h_vector, max_depth=self.max_depth, min_samples=self.min_samples, reg_lambda=self.reg_lambda, split_gamma=self.split_gamma, bin_eps=self.bin_eps, min_hessian_sum=self.min_hessian_sum, col_sample_rate=self.col_sample_rate)
+            self.current_preds += self.eta * new_tree.predict(self.X_train)
+            self.tree_ensemble.append(new_tree)
+          
+    def predict(self, X_eval):
+        raw_output = np.zeros(X_eval.shape[0])
+        for tree in self.tree_ensemble:
+            raw_output += self.eta * tree.predict(X_eval) 
+        return np.full((X_eval.shape[0], 1), np.mean(self.y_train)).flatten().astype('float64') + raw_output
