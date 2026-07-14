@@ -69,7 +69,7 @@ def execute_statewide_training(state_name: str, lag_hours: int = 72, forecast_ho
             # Convert Pandas DataFrame to raw NumPy array for max XGBoost efficiency
             X_numpy = X_universal.values 
             
-            # Iterate through the isolated target variables (e.g., Temp, Rain)
+            # Iterate through the isolated target variables (e.g., Temp, Rain, Humidity)
             for variable_name, y_vector in y_targets_dict.items():
                 model_filename = f"{district}_{variable_name}_model.pkl"
                 model_path = os.path.join(district_path, model_filename)
